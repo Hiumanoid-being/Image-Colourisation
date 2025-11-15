@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # ============================================================
-# 🧱 CNN Encoder
+# CNN Encoder
 # ============================================================
 class CNNEncoder(nn.Module):
     def __init__(self, in_channels=1, feature_dim=256):
@@ -32,7 +32,7 @@ class CNNEncoder(nn.Module):
 
 
 # ============================================================
-# 🔄 Transformer Encoder
+# Transformer Encoder
 # ============================================================
 class TransformerEncoder(nn.Module):
     def __init__(self, feature_dim=256, num_heads=8, num_layers=4, patch_size=4):
@@ -53,8 +53,7 @@ class TransformerEncoder(nn.Module):
         B, C, H, W = x.shape
 
         # Split feature map into patches
-        x = x.unfold(2, self.patch_size, self.patch_size)\
-             .unfold(3, self.patch_size, self.patch_size)
+        x = x.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
         x = x.contiguous().view(B, C, -1, self.patch_size * self.patch_size)
         x = x.permute(0, 2, 1, 3).flatten(2)  # [B, N_patches, C * patch_area]
 
@@ -68,7 +67,7 @@ class TransformerEncoder(nn.Module):
 
 
 # ============================================================
-# 🎨 Decoder (Upsampling back to color space)
+# Decoder (Upsampling back to color space)
 # ============================================================
 class ColorDecoder(nn.Module):
     def __init__(self, feature_dim=256):
@@ -96,7 +95,7 @@ class ColorDecoder(nn.Module):
 
 
 # ============================================================
-# 🌈 Full Model
+# Full Model
 # ============================================================
 class CNNTransformerColorizer(nn.Module):
     def __init__(self):

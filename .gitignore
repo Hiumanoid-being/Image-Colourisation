@@ -1,9 +1,7 @@
-data/raw/
-data/processed/
-data/sample/
 data/
 
-models/checkpoints/
+models/
+
 __pycache__/
 *.ipynb_checkpoints
 .venv/

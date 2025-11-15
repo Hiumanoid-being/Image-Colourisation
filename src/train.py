@@ -7,9 +7,11 @@ import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from cnn_transformer_colorizer_ver1 import CNNTransformerColorizer
+import torch.nn.functional as F
+import random
 
 # ============================================================
-# 🎨 Dataset
+# Dataset
 # ============================================================
 class ColorizationDataset(Dataset):
     def __init__(self, data_dir, split="train"):
@@ -35,7 +37,7 @@ class ColorizationDataset(Dataset):
 
 
 # ============================================================
-# ⚙️ Training Function
+# Training Function
 # ============================================================
 import torch
 from tqdm import tqdm
@@ -100,51 +102,72 @@ def train_model(model, train_loader, criterion, optimizer, device, epochs=5):
 
 
 # ============================================================
-# 🧪 Visualization Function
+# Visualization Function
 # ============================================================
 def visualize_results(model, dataset, device, num_samples=3):
+    """
+    Visualize a few examples of the model's predicted colorization vs ground truth.
+    
+    Args:
+        model: Trained CNN-Transformer colorization model.
+        dataset: Dataset object (returns L and AB tensors).
+        device: 'cpu' or 'cuda'.
+        num_samples: Number of images to display.
+    """
     model.eval()
-    idxs = np.random.choice(len(dataset), num_samples, replace=False)
+    idxs = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
+
     plt.figure(figsize=(9, 3 * num_samples))
+
     for i, idx in enumerate(idxs):
-        L, AB = dataset[idx]
+        L, AB = dataset[idx]  # L: [1,H,W], AB: [2,H,W]
+        L_input = L.unsqueeze(0).to(device)  # add batch dimension
+
         with torch.no_grad():
-            pred_AB = model(L.unsqueeze(0).to(device)).cpu().squeeze(0)
-        pred_AB = pred_AB.permute(1, 2, 0).numpy()
+            pred_AB = model(L_input).cpu()  # [1,2,H_out,W_out]
+
+        # Resize predicted AB to match L's spatial size
+        _, _, H, W = L_input.shape
+        pred_AB = F.interpolate(pred_AB, size=(H, W), mode='bilinear', align_corners=False)
+        pred_AB = pred_AB.squeeze(0).permute(1, 2, 0).numpy()  # [H,W,2]
 
         # Reconstruct LAB → RGB
         L_np = L.squeeze().numpy() * 255
         AB_np = pred_AB * 128 + 128
-        LAB = np.zeros((L_np.shape[0], L_np.shape[1], 3))
+        LAB = np.zeros((H, W, 3))
         LAB[:, :, 0] = L_np
         LAB[:, :, 1:] = AB_np
-        rgb_img = Image.fromarray(LAB.astype(np.uint8), mode="LAB").convert("RGB")
+        rgb_pred = Image.fromarray(LAB.astype(np.uint8), mode="LAB").convert("RGB")
 
-        plt.subplot(num_samples, 3, 3 * i + 1)
-        plt.imshow(L.squeeze(), cmap="gray")
-        plt.title("Input L")
-        plt.axis("off")
-
-        plt.subplot(num_samples, 3, 3 * i + 2)
-        plt.imshow(rgb_img)
-        plt.title("Predicted Color")
-        plt.axis("off")
-
-        plt.subplot(num_samples, 3, 3 * i + 3)
+        # Ground truth RGB for comparison
         AB_gt = AB.permute(1, 2, 0).numpy()
         LAB_gt = np.zeros_like(LAB)
         LAB_gt[:, :, 0] = L_np
         LAB_gt[:, :, 1:] = AB_gt * 128 + 128
         rgb_gt = Image.fromarray(LAB_gt.astype(np.uint8), mode="LAB").convert("RGB")
+
+        # Display side-by-side
+        plt.subplot(num_samples, 3, 3*i + 1)
+        plt.imshow(L.squeeze(), cmap="gray")
+        plt.title("Input L")
+        plt.axis("off")
+
+        plt.subplot(num_samples, 3, 3*i + 2)
+        plt.imshow(rgb_pred)
+        plt.title("Predicted Color")
+        plt.axis("off")
+
+        plt.subplot(num_samples, 3, 3*i + 3)
         plt.imshow(rgb_gt)
         plt.title("Ground Truth")
         plt.axis("off")
+
     plt.tight_layout()
     plt.show()
 
 
 # ============================================================
-# 🚀 Main
+# Main
 # ============================================================
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -155,14 +178,14 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0) # set num_workers=0 for Windows
 
     model = CNNTransformerColorizer().to(device)
-    criterion = nn.MSELoss()
+    criterion = nn.SmoothL1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    model = train_model(model, train_loader, criterion, optimizer, device, epochs=5)
+    model = train_model(model, train_loader, criterion, optimizer, device, epochs=20)
 
     # Save model
     Path("../models").mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), "../models/cnn_transformer_colorizer.pth")
+    torch.save(model.state_dict(), "../models/cnn_transformer_colorizer2.pth") # now at 2
 
     # Visualize some predictions
     visualize_results(model, train_dataset, device)
