@@ -24,11 +24,14 @@ class ColorizationDataset(Dataset):
         gray_path = self.gray_files[idx]
         color_path = self.color_dir / gray_path.with_suffix(".npy").name
 
-        # Load L and AB
-        L = np.array(Image.open(gray_path)) / 255.0
-        AB = np.load(color_path)
+        # Load L and AB (both already normalized to [-1, 1])
+        L_img = np.array(Image.open(gray_path))
+        L = (L_img / 127.5) - 1.0  # [0, 255] -> [-1, 1]
+        AB = np.load(color_path)   # Already [-1, 1]
         
-        # Sanity check: AB should be in [-1, 1] from preprocessing
+        # Sanity check: Both L and AB should be in [-1, 1]
+        assert L.min() >= -1.0 and L.max() <= 1.0, \
+            f"L channel out of range: [{L.min():.3f}, {L.max():.3f}]. Expected [-1, 1]"
         assert AB.min() >= -1.0 and AB.max() <= 1.0, \
             f"AB channels out of range: [{AB.min():.3f}, {AB.max():.3f}]. Expected [-1, 1]"
 

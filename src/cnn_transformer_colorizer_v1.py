@@ -27,6 +27,7 @@ class CNNEncoder(nn.Module):
         )
 
     def forward(self, x):
+        # Input x is L channel in [-1, 1] range
         return self.encoder(x)  # [B, feature_dim, H/4, W/4]
 
 
