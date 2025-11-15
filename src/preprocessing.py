@@ -8,7 +8,7 @@ from tqdm import tqdm
 # -----------------------------
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "sample"            # source images: train/test, (note the use of sample subset)
 PROCESSED_DIR = Path(__file__).resolve().parent.parent / "data" / "processed"   # destination for processed images
-IMAGE_SIZE = (64, 64)                                                           # resize images
+IMAGE_SIZE = (128, 128)                                                         # resize images
 splits = ["train", "test"]                                                      # subfolders in sample/
 
 
