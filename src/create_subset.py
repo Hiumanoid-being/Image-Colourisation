@@ -89,7 +89,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--out_dir",
         type=str,
-        default=str(Path(__file__).resolve().parent.parent / "data" / "processed_subset"),
+        default=str(Path(__file__).resolve().parent.parent / "data" / "processed"),
         help="Directory to save processed subset"
     )
 
@@ -121,22 +121,20 @@ if __name__ == "__main__":
 
 """
 1. Use defaults (10% subset, 64×64):
-python preprocess_subset.py
+python create_subset.py
 
 2. Process 20% of dataset
-python preprocess_subset.py --fraction 0.20
+python create_subset.py --fraction 0.20
 
 3. Change output image size
-python preprocess_subset.py --image_size 128 128
+python create_subset.py --image_size 128 128
 
 4. Specify custom raw/processed directories
-python preprocess_subset.py \
+python create_subset.py \
     --raw_dir "/path/to/raw/data" \
     --out_dir "/path/to/save/output" \
     --fraction 0.15
 
 5. Current use
-python preprocess_subset.py \
-    --image_size 128 128 \
-    --fraction 0.10
+python create_subset.py --image_size 128 128 --fraction 1.00
 """
