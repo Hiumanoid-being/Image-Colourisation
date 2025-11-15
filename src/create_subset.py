@@ -1,69 +1,142 @@
-# ===============================================================
-# Image Colorization Project — Dataset Subsampling Script
-# ===============================================================
-
-import os
-import random
-import shutil
+import argparse
 from pathlib import Path
+from PIL import Image
+import numpy as np
 from tqdm import tqdm
+import random
 
-# Configuration
-# Update the path definitions
-RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
-SUBSET_DIR = Path(__file__).resolve().parent.parent / "data" / "sample"
-IMAGES_PER_CLASS = 100           # per class for training
-TEST_RATIO = 0.2                 # 20% of train subset size
+# -----------------------------
+# Preprocessing function
+# -----------------------------
+def preprocess_image(img_path, out_dir, split, image_size):
+    img = Image.open(img_path).convert("RGB").resize(image_size)
 
-# Ensure subset folders exist
-for split in ["train", "val"]:
-    (SUBSET_DIR / split).mkdir(parents=True, exist_ok=True)
+    # Convert to LAB
+    img_lab = img.convert("LAB")
+    img_np = np.array(img_lab)
 
-# Helper to safely copy an image
-def safe_copy(src, dest):
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
+    # Split channels
+    L = img_np[:, :, 0]
+    AB = img_np[:, :, 1:]
 
-# 1️⃣ Subset from TRAIN
-train_dir = RAW_DIR / "train"
-print("📦 Creating train subset...")
+    # Normalize
+    L = L / 255.0
+    AB = (AB - 128) / 128.0
 
-for class_dir in tqdm(list(train_dir.iterdir())):
-    if not class_dir.is_dir():
-        continue
-    all_images = list(class_dir.glob("*.jpg"))
-    if len(all_images) == 0:
-        continue
+    # Output paths
+    gray_out = out_dir / split / "grayscale" / img_path.name
+    color_out = out_dir / split / "color" / img_path.with_suffix(".npy").name
 
-    # Randomly sample N images
-    sample_size = min(IMAGES_PER_CLASS, len(all_images))
-    subset_imgs = random.sample(all_images, sample_size)
+    # Save grayscale
+    Image.fromarray((L * 255).astype(np.uint8)).save(gray_out)
 
-    # Copy to subset/train/<class_name>/
-    for img_path in subset_imgs:
-        dest = SUBSET_DIR / "train" / class_dir.name / img_path.name
-        safe_copy(img_path, dest)
+    # Save AB
+    np.save(color_out, AB)
 
-print("✅ Train subset complete.")
 
-# 2️⃣ Subset from TEST (proportional ratio)
-test_dir = RAW_DIR / "val"  # or "test" depending on your dataset
-print("📦 Creating test subset...")
+# -----------------------------
+# Main processing logic
+# -----------------------------
+def process_dataset(raw_dir, out_dir, splits, fraction, image_size):
+    # Ensure output folders
+    for split in splits:
+        for sub in ["grayscale", "color"]:
+            (out_dir / split / sub).mkdir(parents=True, exist_ok=True)
 
-for class_dir in tqdm(list(test_dir.iterdir())):
-    if not class_dir.is_dir():
-        continue
-    all_images = list(class_dir.glob("*.jpg"))
-    if len(all_images) == 0:
-        continue
+    for split in splits:
+        split_dir = raw_dir / split
 
-    sample_size = min(int(IMAGES_PER_CLASS * TEST_RATIO), len(all_images))
-    subset_imgs = random.sample(all_images, sample_size)
+        if not split_dir.exists():
+            print(f"Skipping missing split folder: {split_dir}")
+            continue
 
-    # Copy to subset/test/<class_name>/
-    for img_path in subset_imgs:
-        dest = SUBSET_DIR / "test" / class_dir.name / img_path.name
-        safe_copy(img_path, dest)
+        all_images = list(split_dir.rglob("*.jpg"))
 
-print("✅ Test subset complete.")
-print(f"Subset dataset created at: {SUBSET_DIR.resolve()}")
+        if not all_images:
+            print(f"No JPG images found in: {split_dir}")
+            continue
+
+        # Subset size
+        sample_size = max(1, int(len(all_images) * fraction))
+
+        print(f"\n📌 {split}: Found {len(all_images)} images")
+        print(f"➡ Processing {sample_size} images ({fraction * 100:.1f}%)")
+
+        # Random selection
+        sampled_images = random.sample(all_images, sample_size)
+
+        # Process subset
+        for img_path in tqdm(sampled_images):
+            preprocess_image(img_path, out_dir, split, image_size)
+
+    print("\n✅ Subset preprocessing complete!")
+    print(f"Processed subset stored in: {out_dir.resolve()}")
+
+
+# -----------------------------
+# CLI Entry
+# -----------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Image Preprocessing Script (Subset Version)")
+
+    parser.add_argument(
+        "--raw_dir",
+        type=str,
+        default=str(Path(__file__).resolve().parent.parent / "data" / "sample"),
+        help="Path to the raw dataset (containing train/test folders)"
+    )
+
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default=str(Path(__file__).resolve().parent.parent / "data" / "processed_subset"),
+        help="Directory to save processed subset"
+    )
+
+    parser.add_argument(
+        "--fraction",
+        type=float,
+        default=0.10,
+        help="Fraction of dataset to process (default 0.10)"
+    )
+
+    parser.add_argument(
+        "--image_size",
+        type=int,
+        nargs=2,
+        default=[64, 64],
+        help="Output image size as: --image_size 64 64"
+    )
+
+    args = parser.parse_args()
+
+    raw_dir = Path(args.raw_dir)
+    out_dir = Path(args.out_dir)
+    fraction = args.fraction
+    image_size = tuple(args.image_size)
+    splits = ["train", "test"]
+
+    process_dataset(raw_dir, out_dir, splits, fraction, image_size)
+
+
+"""
+1. Use defaults (10% subset, 64×64):
+python preprocess_subset.py
+
+2. Process 20% of dataset
+python preprocess_subset.py --fraction 0.20
+
+3. Change output image size
+python preprocess_subset.py --image_size 128 128
+
+4. Specify custom raw/processed directories
+python preprocess_subset.py \
+    --raw_dir "/path/to/raw/data" \
+    --out_dir "/path/to/save/output" \
+    --fraction 0.15
+
+5. Current use
+python preprocess_subset.py \
+    --image_size 128 128 \
+    --fraction 0.10
+"""
