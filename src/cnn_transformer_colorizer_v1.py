@@ -1,10 +1,8 @@
+# model.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ============================================================
-# CNN Encoder
-# ============================================================
 class CNNEncoder(nn.Module):
     def __init__(self, in_channels=1, feature_dim=256):
         super().__init__()
@@ -27,13 +25,9 @@ class CNNEncoder(nn.Module):
         )
 
     def forward(self, x):
-        # Input x is L channel in [-1, 1] range
         return self.encoder(x)  # [B, feature_dim, H/4, W/4]
 
 
-# ============================================================
-# Transformer Encoder
-# ============================================================
 class TransformerEncoder(nn.Module):
     def __init__(self, feature_dim=256, num_heads=8, num_layers=4, patch_size=4):
         super().__init__()
@@ -90,9 +84,6 @@ class TransformerEncoder(nn.Module):
         return x, (H, W)  # Return original spatial dims
 
 
-# ============================================================
-# Decoder (Upsampling back to color space)
-# ============================================================
 class ColorDecoder(nn.Module):
     def __init__(self, feature_dim=256):
         super().__init__()
@@ -136,9 +127,6 @@ class ColorDecoder(nn.Module):
         return x
 
 
-# ============================================================
-# Full Model
-# ============================================================
 class CNNTransformerColorizer(nn.Module):
     def __init__(self):
         super().__init__()
