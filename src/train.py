@@ -1,21 +1,26 @@
+# train.py
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.parallel import DataParallel
 from pathlib import Path
 from PIL import Image
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from cnn_transformer_colorizer_v1 import CNNTransformerColorizer
+import os
+from cnn_transformer_colorizer_v1 import CNNTransformerColorizer 
 
 # ============================================================
 # Dataset
 # ============================================================
 class ColorizationDataset(Dataset):
     def __init__(self, data_dir, split="train"):
-        self.gray_dir = Path(data_dir).resolve() / split / "grayscale"
-        self.color_dir = Path(data_dir).resolve() / split / "color"
+        self.gray_dir = Path(data_dir) / split / "grayscale"
+        self.color_dir = Path(data_dir) / split / "color"
         self.gray_files = list(self.gray_dir.glob("*.jpg"))
+        
+        print(f"📁 Dataset: {len(self.gray_files)} images found in {self.gray_dir}")
 
     def __len__(self):
         return len(self.gray_files)
@@ -42,28 +47,29 @@ class ColorizationDataset(Dataset):
 
 
 # ============================================================
-# Training Function
+# Enhanced Training Function with Multi-GPU Support
 # ============================================================
-def train_model(model, train_loader, criterion, optimizer, device, epochs=5):
+def train_model_multi_gpu(model, train_loader, criterion, optimizer, device, epochs=5):
     """
-    Train the CNN-Transformer model for image colourisation.
-    Args:
-        model: The model instance (CNN + Transformer).
-        train_loader: DataLoader for training set.
-        criterion: Loss function (e.g. L1Loss).
-        optimizer: Optimizer (e.g. Adam).
-        device: 'cpu' or 'cuda'.
-        epochs: Number of epochs.
+    Enhanced training function with GPU monitoring and multi-GPU support
     """
-    model.to(device)
     model.train()
+    
+    # GPU monitoring function
+    def print_gpu_usage():
+        if torch.cuda.is_available():
+            print("GPU Memory Usage:")
+            for i in range(torch.cuda.device_count()):
+                alloc = torch.cuda.memory_allocated(i) / 1024**3
+                cached = torch.cuda.memory_reserved(i) / 1024**3
+                print(f"  GPU {i}: {alloc:.2f}GB / {cached:.2f}GB")
 
     for epoch in range(epochs):
         total_loss = 0.0
         pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{epochs}")
 
         for i, (L, AB) in pbar:
-            L, AB = L.to(device), AB.to(device)
+            L, AB = L.to(device, non_blocking=True), AB.to(device, non_blocking=True)
 
             # Forward pass
             optimizer.zero_grad()
@@ -78,11 +84,6 @@ def train_model(model, train_loader, criterion, optimizer, device, epochs=5):
                 print(f"Output min/max: {output.min().item():.4f} / {output.max().item():.4f}")
                 print(f"Target min/max: {AB.min().item():.4f} / {AB.max().item():.4f}")
 
-                # Resize output to match target if necessary
-                if output.shape != AB.shape:
-                    print(f"⚠️ Shape mismatch detected. Resizing output from {output.shape} → {AB.shape}")
-                    output = torch.nn.functional.interpolate(output, size=(AB.shape[2], AB.shape[3]), mode='bilinear', align_corners=False)
-
             # --- Resize for safety on every batch
             if output.shape != AB.shape:
                 output = torch.nn.functional.interpolate(output, size=(AB.shape[2], AB.shape[3]), mode='bilinear', align_corners=False)
@@ -96,11 +97,15 @@ def train_model(model, train_loader, criterion, optimizer, device, epochs=5):
 
             total_loss += loss.item()
             pbar.set_postfix(loss=loss.item())
+            
+            # Print GPU usage first batch of first epoch
+            if epoch == 0 and i == 0:
+                print_gpu_usage()
 
         avg_loss = total_loss / len(train_loader)
-        print(f"✅ Epoch [{epoch+1}/{epochs}] - Average Loss: {avg_loss:.6f}\n")
+        print(f"Epoch [{epoch+1}/{epochs}] - Average Loss: {avg_loss:.6f}")
 
-    print("🎯 Training completed successfully!")
+    print("Training completed successfully!")
     return model
 
 
@@ -108,69 +113,187 @@ def train_model(model, train_loader, criterion, optimizer, device, epochs=5):
 # Visualization Function
 # ============================================================
 def visualize_results(model, dataset, device, num_samples=3):
+    """
+    Visualize model predictions by converting LAB back to RGB.
+    All values are in [-1, 1] range.
+    """
+    from skimage import color
+    
     model.eval()
     idxs = np.random.choice(len(dataset), num_samples, replace=False)
     plt.figure(figsize=(9, 3 * num_samples))
+    
     for i, idx in enumerate(idxs):
         L, AB = dataset[idx]
+        
+        # Get prediction
         with torch.no_grad():
             pred_AB = model(L.unsqueeze(0).to(device)).cpu().squeeze(0)
-        pred_AB = pred_AB.permute(1, 2, 0).numpy()
-
-        # Reconstruct LAB → RGB
-        L_np = L.squeeze().numpy() * 255
-        AB_np = pred_AB * 128 + 128
-        LAB = np.zeros((L_np.shape[0], L_np.shape[1], 3))
-        LAB[:, :, 0] = L_np
-        LAB[:, :, 1:] = AB_np
-        rgb_img = Image.fromarray(LAB.astype(np.uint8), mode="LAB").convert("RGB")
-
+        
+        # Convert from tensors to numpy
+        L_np = L.squeeze().numpy()  # [-1, 1]
+        pred_AB_np = pred_AB.permute(1, 2, 0).numpy()  # [-1, 1]
+        AB_gt_np = AB.permute(1, 2, 0).numpy()  # [-1, 1]
+        
+        # Convert back to CIELAB range
+        L_lab = (L_np + 1.0) * 50.0  # [-1, 1] -> [0, 100]
+        pred_AB_lab = pred_AB_np * 110.0  # [-1, 1] -> [-110, 110]
+        AB_gt_lab = AB_gt_np * 110.0  # [-1, 1] -> [-110, 110]
+        
+        # Reconstruct LAB images
+        pred_lab = np.zeros((L_lab.shape[0], L_lab.shape[1], 3))
+        pred_lab[:, :, 0] = L_lab
+        pred_lab[:, :, 1:] = pred_AB_lab
+        
+        gt_lab = np.zeros_like(pred_lab)
+        gt_lab[:, :, 0] = L_lab
+        gt_lab[:, :, 1:] = AB_gt_lab
+        
+        # Convert LAB to RGB using skimage
+        pred_rgb = color.lab2rgb(pred_lab)
+        gt_rgb = color.lab2rgb(gt_lab)
+        
+        # Plot
         plt.subplot(num_samples, 3, 3 * i + 1)
-        plt.imshow(L.squeeze(), cmap="gray")
+        plt.imshow(L_np, cmap="gray", vmin=-1, vmax=1)
         plt.title("Input L")
         plt.axis("off")
 
         plt.subplot(num_samples, 3, 3 * i + 2)
-        plt.imshow(rgb_img)
+        plt.imshow(np.clip(pred_rgb, 0, 1))
         plt.title("Predicted Color")
         plt.axis("off")
 
         plt.subplot(num_samples, 3, 3 * i + 3)
-        AB_gt = AB.permute(1, 2, 0).numpy()
-        LAB_gt = np.zeros_like(LAB)
-        LAB_gt[:, :, 0] = L_np
-        LAB_gt[:, :, 1:] = AB_gt * 128 + 128
-        rgb_gt = Image.fromarray(LAB_gt.astype(np.uint8), mode="LAB").convert("RGB")
-        plt.imshow(rgb_gt)
+        plt.imshow(np.clip(gt_rgb, 0, 1))
         plt.title("Ground Truth")
         plt.axis("off")
+        
     plt.tight_layout()
     plt.show()
 
 
 # ============================================================
-# Main
+# Auto-detect Dataset Path
+# ============================================================
+def find_dataset_path():
+    """Automatically find the dataset path in Kaggle"""
+    input_dir = Path("/kaggle/input")
+    
+    if not input_dir.exists():
+        print("/kaggle/input directory not found")
+        return None
+    
+    available_datasets = [d for d in input_dir.iterdir() if d.is_dir()]
+    print(f"Available datasets: {[d.name for d in available_datasets]}")
+    
+    # Look for processed data
+    for dataset in available_datasets:
+        potential_path = dataset / "processed"
+        if potential_path.exists():
+            print(f"Found processed data at: {potential_path}")
+            return str(potential_path)
+    
+    # Look for train/grayscale structure directly
+    for dataset in available_datasets:
+        potential_train = dataset / "train" / "grayscale"
+        if potential_train.exists():
+            print(f"Found data at: {dataset}")
+            return str(dataset)
+    
+    # Use the first dataset as fallback
+    if available_datasets:
+        fallback = available_datasets[0]
+        print(f"Using fallback dataset: {fallback}")
+        return str(fallback)
+    
+    print("No datasets found")
+    return None
+
+
+# ============================================================
+# Enhanced Main Function with Multi-GPU Support
 # ============================================================
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # GPU configuration
+    num_gpus = torch.cuda.device_count()
+    print(f"Found {num_gpus} GPU(s)")
+    
+    for i in range(num_gpus):
+        gpu_props = torch.cuda.get_device_properties(i)
+        print(f"  - GPU {i}: {torch.cuda.get_device_name(i)}")
+        print(f"    Memory: {gpu_props.total_memory / 1024**3:.1f} GB")
+    
+    # Use all available GPUs
+    if num_gpus > 1:
+        device = torch.device("cuda:0")  # Use first GPU as main
+        print(f"Using {num_gpus} GPUs with DataParallel")
+        
+        # Model with DataParallel
+        model = CNNTransformerColorizer()
+        model = DataParallel(model)
+        model = model.to(device)
+        
+        # Larger batch size for multiple GPUs
+        batch_size = 8 * num_gpus
+        
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = CNNTransformerColorizer().to(device)
+        batch_size = 8
+        print(f"Using device: {device}")
 
-    data_dir = "../data/processed"
-    train_dataset = ColorizationDataset(data_dir, split="train")
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=0) # set num_workers=0 for Windows
+    # Auto-detect dataset path for Kaggle
+    data_dir = find_dataset_path()
+    if data_dir is None:
+        print("Could not find dataset. Please check your Kaggle dataset.")
+        return
+    
+    print(f"Using data directory: {data_dir}")
+    
+    try:
+        train_dataset = ColorizationDataset(data_dir, split="train")
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True, 
+            num_workers=2,
+            pin_memory=True  # Faster data transfer to GPU
+        )
+        print(f"Batch size: {batch_size} (adjusted for {num_gpus} GPU(s))")
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        print("Available directories:")
+        for root, dirs, files in os.walk(data_dir):
+            level = root.replace(str(data_dir), '').count(os.sep)
+            indent = ' ' * 2 * level
+            print(f'{indent}{os.path.basename(root)}/')
+            subindent = ' ' * 2 * (level + 1)
+            for file in files[:5]:  # Show first 5 files
+                print(f'{subindent}{file}')
+            if len(files) > 5:
+                print(f'{subindent}... and {len(files) - 5} more files')
+        return
 
-    model = CNNTransformerColorizer().to(device)
-    criterion = nn.L1Loss()  # Changed from MSELoss to L1Loss
-    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)  # Increased learning rate
+    criterion = nn.L1Loss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
-    model = train_model(model, train_loader, criterion, optimizer, device, epochs=5)
+    print("Starting training with multi-GPU support...")
+    model = train_model_multi_gpu(model, train_loader, criterion, optimizer, device, epochs=100)
 
-    # Save model
-    Path("../models").mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), "../models/cnn_transformer_colorizer.pth")
+    # Save model (handle DataParallel wrapping)
+    if num_gpus > 1:
+        model_to_save = model.module  # Get the original model from DataParallel
+    else:
+        model_to_save = model
+        
+    model_save_path = "/kaggle/working/cnn_transformer_colorizer_multi_gpu.pth"
+    torch.save(model_to_save.state_dict(), model_save_path)
+    print(f"Model saved to: {model_save_path}")
 
     # Visualize some predictions
-    visualize_results(model, train_dataset, device)
+    print("Generating visualizations...")
+    visualize_results(model_to_save, train_dataset, device)
 
 
 if __name__ == "__main__":
