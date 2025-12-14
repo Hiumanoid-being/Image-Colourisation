@@ -1,0 +1,5 @@
+compare results/ performance
+
+ground truth LAB to predicted LAB
+ground truth .jpg to predicted .jpg
+.jnd (juxt noticiable difference)
