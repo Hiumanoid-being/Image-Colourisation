@@ -9,7 +9,7 @@ from skimage import color
 # -----------------------------
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "sample"
 PROCESSED_DIR = Path(__file__).resolve().parent.parent / "data" / "processed"
-IMAGE_SIZE = (64, 64)
+IMAGE_SIZE = (256, 256)
 splits = ["train", "test"]
 
 # -----------------------------
