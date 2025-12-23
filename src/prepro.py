@@ -46,7 +46,7 @@ def process_image(img_path: Path):
     
     # Convert L channel to grayscale image (0-255 range for JPEG)
     gray_img = Image.fromarray(np.uint8((L_channel / 100.0) * 255))
-
+    
     # Save outputs
     rel_path = img_path.relative_to(RAW_DIR)
     color_path = OUT_COLOR / rel_path.with_suffix(".npy")
