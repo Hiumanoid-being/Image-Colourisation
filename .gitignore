@@ -3,5 +3,5 @@ data/
 models/128x128/
 __pycache__/
 *.ipynb_checkpoints
-
+.gradio
 results/
