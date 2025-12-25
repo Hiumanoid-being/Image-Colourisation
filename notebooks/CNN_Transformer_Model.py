@@ -157,14 +157,7 @@ class ColourDecoder(nn.Module):
         return x
 
 
-class CNNTransformerColourizer(nn.Module):
-    """
-    Complete colourization model combining CNN encoder, Transformer, and decoder.
-    
-    Input: Grayscale image (L channel) [B, 1, H, W]
-    Output: AB colour channels [B, 2, H, W]
-    """
-    
+class CNNTransformerColourizer(nn.Module):   
     def __init__(self):
         super().__init__()
         self.encoder = CNNEncoder()
