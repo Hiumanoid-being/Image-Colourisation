@@ -1,7 +1,7 @@
 import gradio as gr
 import torch
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image
 from skimage import color
 from pathlib import Path
 import sys
@@ -27,52 +27,60 @@ else:
 model.eval()
 
 def colorize_image(image, saturation_boost):
-    # Convert to numpy if PIL Image
-    if isinstance(image, Image.Image):
-        image = np.array(image)
+    """
+    Colorize a grayscale image following inference.ipynb exactly.
+    """
+    # Convert to PIL Image if numpy array
+    if isinstance(image, np.ndarray):
+        image = Image.fromarray(image)
     
-    # Convert to grayscale if RGB (take mean of channels)
-    if len(image.shape) == 3 and image.shape[2] == 3:
-        image = np.mean(image, axis=2)
+    # Convert to grayscale if RGB
+    if image.mode == 'RGB':
+        image = image.convert('L')
     
-    # Normalize to [-1, 1]
-    L = image.astype("float32")
+    # Convert to numpy and normalize to [-1, 1]
+    L = np.array(image).astype("float32")
     L = (L / 128) - 1.0
-    L_tensor = torch.tensor(L).unsqueeze(0).unsqueeze(0).to(device)
     
-    # Get prediction
+    # Add batch dimension: [H, W] -> [1, H, W]
+    L = torch.tensor(L).unsqueeze(0)
+    
+    # L already has shape [1, H, W], so just add channel dimension and move to device
+    L_tensor = L.unsqueeze(0).to(device)  # Now shape is [1, 1, H, W]
+    
     with torch.no_grad():
         pred_AB = model(L_tensor)
     
-    # Apply saturation boost
+    # Apply saturation boost (in normalized tanh [-1,1] space) and clamp
     pred_AB_boosted = torch.clamp(pred_AB * saturation_boost, -1.0, 1.0)
     
-    # Convert to numpy
-    L_np = L_tensor.squeeze().cpu().numpy()
-    pred_AB_boosted_np = np.transpose(pred_AB_boosted.squeeze().cpu().numpy(), (1, 2, 0))
+    # Convert to numpy and reshape: (2, H, W) -> (H, W, 2)
+    L_np = L.squeeze().cpu().numpy()  # Remove batch dim from L
+    pred_AB_boosted_np = np.transpose(pred_AB_boosted.squeeze(0).cpu().numpy(), (1, 2, 0))
     
     # Convert back to CIELAB ranges
-    L_lab = L_np * 100.0
+    # L in [-1,1] -> normalize to [0,100]
+    L_lab = ((L_np + 1.0) / 2.0) * 100.0
+    
+    # AB predicted in [-1,1] -> approximate a/b scale
     AB_SCALE = 128.0
-    pred_AB_lab = pred_AB_boosted_np * AB_SCALE
-    pred_AB_lab = np.clip(pred_AB_lab, -127.0, 127.0)
+    pred_AB_boosted_lab = pred_AB_boosted_np * AB_SCALE
     
-    # Reconstruct LAB image
-    lab_out = np.empty((L_lab.shape[0], L_lab.shape[1], 3), dtype=np.float64)
-    lab_out[:, :, 0] = L_lab
-    lab_out[:, :, 1:] = pred_AB_lab
+    # Clip AB to reasonable CIELAB-like range to avoid extreme values
+    pred_AB_boosted_lab = np.clip(pred_AB_boosted_lab, -127.0, 127.0)
     
-    # Convert LAB → RGB
-    rgb_out_f = color.lab2rgb(lab_out)
-    rgb_out_f = np.clip(rgb_out_f, 0.0, 1.0)
-    rgb_out = (rgb_out_f * 255.0).round().astype(np.uint8)
+    # Reconstruct LAB image (use float dtype)
+    lab_boosted = np.empty((L_lab.shape[0], L_lab.shape[1], 3), dtype=np.float64)
+    lab_boosted[:, :, 0] = L_lab
+    lab_boosted[:, :, 1:] = pred_AB_boosted_lab
     
-    # Convert to PIL Image for additional saturation enhancement
-    img_colorized = Image.fromarray(rgb_out)
-    enhancer = ImageEnhance.Color(img_colorized)
-    img_final = enhancer.enhance(1.0) 
+    # Convert LAB → RGB, clamp to [0,1] then convert to uint8 safely
+    rgb_boosted_f = color.lab2rgb(lab_boosted)
+    rgb_boosted_f = np.clip(rgb_boosted_f, 0.0, 1.0)
+    rgb_boosted = (rgb_boosted_f * 255.0).round().astype(np.uint8)
     
-    return img_final
+    # Convert to PIL Image
+    return Image.fromarray(rgb_boosted)
 
 # Create Gradio interface
 with gr.Blocks(title="Image Colourisation") as demo:
@@ -89,7 +97,7 @@ with gr.Blocks(title="Image Colourisation") as demo:
             saturation_slider = gr.Slider(
                 minimum=1.0,
                 maximum=10.0,
-                value=1.5,
+                value=1.2,
                 step=0.1,
                 label="Saturation Boost",
                 info="1.0 = no boost, >1.0 = more saturated"
